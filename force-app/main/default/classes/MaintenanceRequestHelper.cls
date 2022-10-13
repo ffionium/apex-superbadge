@@ -1,32 +1,22 @@
-/**
- * @description       : 
- * @author            : ChangeMeIn@UserSettingsUnder.SFDoc
- * @group             : 
- * @last modified on  : 09-13-2022
- * @last modified by  : ChangeMeIn@UserSettingsUnder.SFDoc
-**/
 public with sharing class MaintenanceRequestHelper {
 
-    public static void updateWorkOrders(List<Case> casesToProcess) {
-        
-        system.debug(casesToProcess);
-    
-        // Parent to child query to get Maint_request data. Do I need this bit?
-        List<Case> casesWithData = [SELECT id, Type, Vehicle__c, ProductId, (SELECT id, Equipment__c, Maintenance_Request__c, Quantity__c FROM Equipment_Maintenance_Items__r) FROM Case WHERE id IN: casesToProcess];
+    public static void updateWorkOrders(List<Case> casesFromTrigger) {
+           
+        // Filter cases from trigger by status and type, and Parent to Child query to get Equipment_Maintenance_Items__c data. 
+        List<Case> casesToProcess = [SELECT id, Type, Vehicle__c, ProductId, (SELECT id, Equipment__c, Maintenance_Request__c, Quantity__c FROM Equipment_Maintenance_Items__r) FROM Case WHERE id IN: casesFromTrigger AND (Type = 'Repair' OR Type = 'Routine Maintenance') AND Status = 'Closed'];
+       
     
         // List of string IDs to help with query below
         List<String> idStrings = new List<String>();
         For(Case c : casesToProcess){
-            if(c.Type == 'Repair' || c.Type == 'Routine Maintenance'){
-                if(c.Status == 'Closed'){
-                    String s = String.valueOf(c.id);
-                    idStrings.add(s);
+            String s = String.valueOf(c.id);
+            idStrings.add(s);
                 }
-            }
-        }
+            
+        
         
         // List of MI items related to the cases being processed. Use to create clones and query child to parent Equipment__c for maintenance cycle. Should copy 
-        // exact number of records related to each maintenance request.
+        // exact number of records related to each maintenance request. Do I need this? Yes because need a list of Equipment_Maintenance_Items__r sObjects. Maybe doesn't need to be parent>child in the above?
         List<Equipment_Maintenance_Item__c> equipItems = [SELECT id, Equipment__c, Equipment__r.Maintenance_Cycle__c, Maintenance_Request__c, Quantity__c FROM Equipment_Maintenance_Item__c WHERE Maintenance_Request__c IN: idStrings];
                  
         // lists to contain new records
@@ -34,7 +24,7 @@ public with sharing class MaintenanceRequestHelper {
         List<Equipment_Maintenance_Item__c> newMaintItems = new List<Equipment_Maintenance_Item__c>();
     
         // create new case for each one to be processed
-        For(Case cs : casesWithData){
+        For(Case cs : casesToProcess){
     
             // Integer MaintCycleDays = cs.ProductId.Maintenance_Cycle__c.IntValue();
     
@@ -62,7 +52,7 @@ public with sharing class MaintenanceRequestHelper {
         
         insert new_cases;
     
-        // create new maint items
+        // create new maint items. Sets parent case of new case as Maint_req
         For(Equipment_Maintenance_Item__c MI : equipItems){
             Equipment_Maintenance_Item__c newMI = new Equipment_Maintenance_Item__c();
             newMI.Equipment__c = MI.Equipment__c;
@@ -72,7 +62,7 @@ public with sharing class MaintenanceRequestHelper {
         }   
         
         
-        // update maint items to pair them with the right case
+        // update maint items to pair them with the right case via the parentID of the related case
         For(Case c : new_cases){
             For(Equipment_Maintenance_Item__c MI : newMaintItems){
                 If(c.parentId == MI.Maintenance_Request__c){
@@ -82,12 +72,24 @@ public with sharing class MaintenanceRequestHelper {
         }
         insert newMaintItems;
     
-        // query for lowest Maintenance_Cycle__c. Child to parent from Equipment_Maintenance_Item__c to Product2, where
-        // Equipment_Maintenance_Item__c.maintenance_request__c in new_cases
-        // AggregateResult[] shortestCycle = [SELECT id, Maintenance_Request__c, (SELECT id, MIN(Maintenance_Cycle__c) FROM Product2) FROM Equipment_Maintenance_Item__c WHERE Maintenance_Request__c IN :new_cases];
+        // map to use to query for lowest maintenance cycle for each case (which has multiple EMIs related)
+        Map<Id,List<Equipment_Maintenance_Item__c>> mapOfList = new Map<Id,List<Equipment_Maintenance_Item__c>>();
+
+        // common design pattern for Map<ID,List<SObject>> : https://redargyle.com/improving-apex-fluidity-using-streams/
+        For(Equipment_Maintenance_Item__c e : newMaintItems){
+            system.debug(e.maintenance_request__c);
+            if(!mapOfList.containsKey(e.maintenance_request__c)){
+                mapOfList.put(e.maintenance_request__c, new List<Equipment_Maintenance_Item__c>());
+            }
+            mapOfList.get(e.Maintenance_Request__c).add(e);
+        }
+
+        system.debug(mapOfList);
+
     
         For(Case c : new_cases){
+            
             // Integer MaintCycleDays = c.ProductId.Maintenance_Cycle__c.IntValue();
         }
     }
-    }
+}
