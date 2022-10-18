@@ -54,7 +54,7 @@ public with sharing class MaintenanceRequestHelper {
     
         // create new maint items. Sets parent case of new case as Maint_req
         For(Equipment_Maintenance_Item__c MI : equipItems){
-            Equipment_Maintenance_Item__c newMI = new Equipment_Maintenance_Item__c();
+            Equipment_Maintenance_Item__c newMI = new Equipment_Maintenance_Item__c();            
             newMI.Equipment__c = MI.Equipment__c;
             newMI.Quantity__c = MI.Quantity__c;
             newMI.Maintenance_Request__c = MI.Maintenance_Request__c;
@@ -71,12 +71,16 @@ public with sharing class MaintenanceRequestHelper {
                 }	        
         }
         insert newMaintItems;
-    
+           
         // map to use to query for lowest maintenance cycle for each case (which has multiple EMIs related)
         Map<Id,List<Equipment_Maintenance_Item__c>> mapOfList = new Map<Id,List<Equipment_Maintenance_Item__c>>();
 
+        // query for maintencance cycle field
+        List<Equipment_Maintenance_Item__c> mapMaintItems = [SELECT id, maintenance_request__c, Equipment__r.Maintenance_Cycle__c FROM Equipment_Maintenance_Item__c WHERE id IN: newMaintItems];
+
         // common design pattern for Map<ID,List<SObject>> : https://redargyle.com/improving-apex-fluidity-using-streams/
-        For(Equipment_Maintenance_Item__c e : newMaintItems){
+        // populate map of key: EMI's parent case, Value: EMI
+        For(Equipment_Maintenance_Item__c e : mapMaintItems){
             system.debug(e.maintenance_request__c);
             if(!mapOfList.containsKey(e.maintenance_request__c)){
                 mapOfList.put(e.maintenance_request__c, new List<Equipment_Maintenance_Item__c>());
@@ -86,10 +90,44 @@ public with sharing class MaintenanceRequestHelper {
 
         system.debug(mapOfList);
 
+        // Map specifically to use for mapping lowest cycle day to Case ID
+        Map<ID, Integer> caseIDtoMaintCycle = new Map<ID, Integer>();
+
+        // from map, get lowest maint cycle day for each case. How to iterate over keyset of map?
+        // create list of numbers for each key of the map. use sort, then pick out the first value?
+        For(ID key : mapOfList.keyset()){
+            system.debug('Equipment cycle days: ' + mapOfList.get(key));
+            // creat loop here as the above is a list
+            List<Equipment_Maintenance_Item__c> EMIs = mapOfList.get(key);
+            system.debug(EMIs);
+            List<Integer> maintCycleDays = new List<Integer>();
+            For(Equipment_Maintenance_Item__c EMI : EMIs){
+                // i think I need to query for ths field...
+                Decimal maintCycle = EMI.Equipment__r.Maintenance_Cycle__c;
+                Integer intMaintCycle = Integer.ValueOf(maintCycle);
+                maintCycleDays.add(intMaintCycle);
+            }
+            system.debug(maintCycleDays);
+        
+            // sort list
+            maintCycleDays.sort();
+            Integer lowestCycle = maintCycleDays[0];
+            system.debug(lowestCycle);                      
+            caseIDtoMaintCycle.put(key, lowestCycle);
+        }
+        system.debug(caseIDtoMaintCycle);
+
     
-        For(Case c : new_cases){
-            
+
+        For(ID key : caseIDtoMaintCycle.keyset()){
+            For(Case c : new_cases){
+                If(c.ID == key){
+                    c.Date_Due__c = System.Today() + caseIDtoMaintCycle.get(key);
+
+                }
+            }
             // Integer MaintCycleDays = c.ProductId.Maintenance_Cycle__c.IntValue();
         }
+        update new_cases;
     }
 }
